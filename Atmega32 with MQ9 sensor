@@ -1,0 +1,200 @@
+/*using i2c for LCD*/ 
+
+#include<avr/io.h>
+#include<util/delay.h>
+#include<stdlib.h>
+#include<math.h>
+#include<util/twi.h>
+
+unsigned char lcd=0x00;
+
+#define RS 0
+#define EN 1
+
+#define RS_R0_RATIO_CLEAR_AIR 9.83
+#define RESISTANCE_LOAD 10
+
+float LPG[3] ={2.3 , 0.04 , -0.31};
+
+/* all function for lcd*/
+
+void twi_init()
+{
+    PORTC |=(1<<PINC0) |(1<<PINC1);
+    TWCR =(1<<TWEN);
+    TWBR =0x0C;
+    TWSR =0x00;
+}
+void twi_start()
+{
+    TWCR |=(1<<TWINT)|(1<<TWEN)|(1<<TWSTA);
+    while(!(TWCR &(1<<TWINT)));
+    while((TWSR & 0xF8) != TW_START);
+}
+void twi_stop()
+{
+    TWCR |=(1<<TWINT)|(1<<TWEN)|(1<<TWSTO);
+}
+void twi_write_address(unsigned char address)
+{
+    TWDR =address;
+    TWCR |=(1<<TWINT)|(1<<TWEN);
+    while(!(TWCR &(1<<TWINT)));
+    while((TWSR & 0xF8) != TW_MT_SLA_ACK);
+}
+void twi_write_data(unsigned char data)
+{
+    TWDR =data;
+    TWCR |=(1<<TWINT)|(1<<TWEN);
+    while(!(TWCR &(1<<TWINT)));
+    while((TWSR & 0xF8) != TW_MT_DATA_ACK);
+}
+void toggle()
+{
+    lcd |=(1<<EN);
+    twi_write_data(lcd);
+    _delay_us(10);
+    lcd &=~(1<<EN);
+    twi_write_data(lcd);
+}
+void lcd_write_cmd(unsigned char cmd)
+{
+    lcd &=~(1<<RS);
+    lcd =(lcd & 0x0F) |(cmd & 0xF0);
+    twi_write_data(lcd);
+    toggle();
+    _delay_us(300);
+    lcd = (lcd & 0x0F) |(cmd << 4);
+    twi_write_data(lcd);
+    toggle();
+    _delay_us(10);
+}
+void lcd_write_data(unsigned char data)
+{
+    lcd |=(1<<RS);
+    lcd =(lcd & 0x0F) | (data & 0xF0);
+    twi_write_data(lcd);
+    toggle();
+    _delay_us(300);
+    lcd = (lcd & 0x0F) |(data << 4);
+    twi_write_data(lcd);
+    toggle();
+    _delay_us(10);
+}
+void lcd_msg(char *msg)
+{
+    while (*msg)
+    {
+        lcd_write_data(*msg++);
+    }    
+}
+void lcd_putnumber(double number)
+{
+    char string[10];
+    dtostrf(number,2,2,string);
+    lcd_msg(string);
+}
+void lcd_goto_xy(unsigned char row , unsigned char pos)
+{
+    if(row ==1 && pos <16)
+    {
+        lcd_write_cmd(0x80 | (pos & 0xF0));
+    }
+    if(row ==2 && pos <16)
+    {
+        lcd_write_cmd (0xC0 | (pos & 0xF0));  
+    }
+}
+void lcd_init()
+{
+    lcd_write_cmd(0x02);
+    lcd_write_cmd(0x28);
+    lcd_write_cmd(0x06);
+    lcd_write_cmd(0x0C);
+    lcd_write_cmd(0x01);
+}
+
+
+/*================END=============*/
+
+/* all function ADC */
+
+void ADC_init()
+{
+    DDRA &=~(1<<0);
+    ADMUX =0x40;
+    ADCSRA =0x87;
+}
+int read_ADC()
+{
+    ADCSRA |=(1<<ADSC) |(1<<ADIF);
+    while(!(ADCSRA & (1<< ADIF)));
+    ADCSRA |=(1<< ADIF);
+    return ADCW;
+}
+
+/*================END=============*/
+
+/* all function for MQ9 sensor */
+
+float resistancecalculate(int adc_val)
+{
+    return RESISTANCE_LOAD*(1023 - adc_val)/adc_val;
+}
+float RO_calculate()
+{
+    float val=0;
+    for (int i=0 ; i<50 ;i++)
+    {
+        val+=resistancecalculate(read_ADC());
+    }
+    val /=50;
+    val/=RS_R0_RATIO_CLEAR_AIR;
+    return val;
+}
+float RS_calculate()
+{
+    float val=0;
+    for (int i=0;i<10;i++)
+    {
+        val+=resistancecalculate(read_ADC());
+    }
+    val/=10;
+    return val;
+}
+float getLPGvalue(float Rs , float Ro)
+{
+    return pow(10, ((log10(Rs/Ro)-LPG[1]))/LPG[2]+LPG[0]);
+}
+
+/*================END=============*/
+
+void init()
+{
+    ADC_init();
+    twi_init();
+    twi_start();
+    twi_write_address(0x40);
+    lcd_init();
+}
+void solve()
+{
+    float ro=RO_calculate();
+    _delay_ms(10);
+    float rs=RS_calculate();
+    _delay_ms(5);
+    lcd_goto_xy(1,0);
+    lcd_msg("LPG= ");
+    lcd_putnumber((double)getLPGvalue(rs ,ro));
+    lcd_msg(" ppm");
+}
+
+int main()
+{
+    init();
+    while(1)
+    {
+        solve();
+    }
+    return 0;
+}
