@@ -1,0 +1,111 @@
+#include<avr/io.h>
+#include<util/delay.h>
+#include<stdlib.h>
+#include<avr/interrupt.h>
+
+int timer_over_flow=0;
+ISR (TIMER1_OVF_vect)
+{
+    timer_over_flow++;
+}
+
+void toggle()
+{
+    PORTC |=(1<<PINC1);
+    _delay_us(10);
+    PORTC &=~(1<<PINC1);
+}
+void lcd_write_cmd(unsigned char cmd)
+{
+    PORTC &=~(1<<PINC0);
+    PORTC =(PORTC & 0x0F) | (cmd & 0xF0);
+    toggle();
+    _delay_us(200);
+    PORTC =(PORTC & 0x0F) | (cmd << 4);
+    toggle();
+    _delay_us(20);
+}
+void lcd_write_data(unsigned char data)
+{
+    PORTC |=(1<<PINC0);
+    PORTC =(PORTC & 0x0F) | (data & 0xF0);
+    toggle();
+    _delay_us(200);
+    PORTC =(PORTC & 0x0F) | (data << 4);
+    toggle();
+    _delay_us(20);
+}
+void lcd_msg(char *msg)
+{
+    while(*msg)
+    {
+        lcd_write_data(*msg++);
+    }
+}
+void lcd_putnumber(double number)
+{
+    char string[10];
+    dtostrf(number ,2,2,string);
+    lcd_msg(string);
+}
+void lcd_goto_xy(unsigned char row , unsigned char pos)
+{
+    if(row ==1 && pos < 16)
+    {
+        lcd_write_cmd (0x80 | (pos & 0xF0));
+    }
+    if(row ==2 && pos < 16)
+    {
+        lcd_write_cmd (0xC0 | (pos & 0xF0));
+    }
+}
+void lcd_init()
+{
+    DDRC =0xFF;
+    _delay_us(5);
+    lcd_write_cmd(0x02);
+    lcd_write_cmd(0x28);
+    lcd_write_cmd(0x06);
+    lcd_write_cmd(0x0C);
+    lcd_write_cmd(0x01);
+}
+void lcd_clear()
+{
+    lcd_write_cmd(0x01);
+}
+
+void trigger()
+{
+    DDRD |=(1<<PIND0);
+    PORTD |=(1<<PIND0);
+    _delay_us(20);
+    PORTD &=~(1<<PIND0);
+}
+float read_HCSR04()
+{
+    trigger();
+    TCCR1B = 0x42;
+    while(!(TIFR &(1<<ICF1)));
+    TIFR =(1<<TOV1) |(1<<ICF1);
+    TCNT1 =0;
+    timer_over_flow=0;
+    TCCR1B =0x02;
+    while(!(TIFR &(1<<ICF1)));
+    TIFR =(1<<ICF1) |(1<<TOV1);
+    _delay_ms(10);
+    return (ICR1 +(timer_over_flow*65535))*8/932.95;
+}
+
+int main()
+{
+    TCCR1A =0;
+    lcd_init();
+    TIMSK |=(1<<TOIE1);
+    sei();
+    while(1)
+    {
+        lcd_goto_xy(1,0);
+        _delay_us(2000);
+        lcd_putnumber(read_HCSR04());
+    }
+}
